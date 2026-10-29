@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1B1A17">
+  <title>Запись — Барбершоп «Лезвие»</title>
+  <link rel="stylesheet" href="app.css">
+  <!-- Официальный скрипт Telegram Mini Apps, лежит рядом: так приложение не зависит от доступности telegram.org -->
+  <script src="telegram-web-app.js"></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="logo" aria-label="Барбершоп «Лезвие»">
+    <svg viewBox="0 0 220 70" aria-hidden="true">
+      <path d="M8 38 Q58 22 112 31 L112 45 Q58 54 8 38 Z" fill="#7E6233"/>
+      <path d="M110 30 L198 24 Q212 23 212 35 L211 40 Q207 51 193 52 L122 52 Q113 52 110 45 Z" fill="#E9C27A"/>
+      <circle cx="111" cy="38" r="6" fill="#1B1A17" stroke="#E9C27A" stroke-width="3"/>
+    </svg>
+    <span>ЛЕЗВИЕ</span>
+  </div>
+  <ol class="progress" aria-label="Шаги записи">
+    <li data-step="1"></li><li data-step="2"></li><li data-step="3"></li><li data-step="4"></li>
+  </ol>
+</header>
+
+<main>
+  <!-- Шаг 1. Услуга -->
+  <section class="screen" id="screen-1">
+    <p class="hello" id="hello">Здравствуйте!</p>
+    <h1>Выберите услугу</h1>
+    <div class="services" id="services" role="radiogroup" aria-label="Услуги"></div>
+  </section>
+
+  <!-- Шаг 2. День и время -->
+  <section class="screen" id="screen-2" hidden>
+    <p class="crumb" id="crumb-2"></p>
+    <h1>Когда вам удобно?</h1>
+    <div class="days" id="days" role="tablist" aria-label="Дни"></div>
+    <div class="times" id="times" aria-label="Время"></div>
+    <p class="empty" id="no-times" hidden>На этот день свободного времени нет — выберите другой.</p>
+    <p class="hint"><span class="dot free"></span>свободно <span class="dot busy"></span>занято</p>
+  </section>
+
+  <!-- Шаг 3. Контакты -->
+  <section class="screen" id="screen-3" hidden>
+    <p class="crumb" id="crumb-3"></p>
+    <h1>Ваши контакты</h1>
+    <label class="field">
+      <span>Имя</span>
+      <input id="name" type="text" autocomplete="given-name" maxlength="50" placeholder="Как к вам обращаться">
+    </label>
+    <label class="field">
+      <span>Телефон</span>
+      <input id="phone" type="tel" autocomplete="tel" inputmode="tel" maxlength="18" placeholder="+7 900 123-45-67">
+    </label>
+    <p class="error" id="form-error" hidden></p>
+    <label class="consent">
+      <input id="consent" type="checkbox">
+      <span>Согласен на обработку персональных данных для записи</span>
+    </label>
+  </section>
+
+  <!-- Шаг 4. Проверка -->
+  <section class="screen" id="screen-4" hidden>
+    <h1>Проверьте запись</h1>
+    <div class="summary" id="summary"></div>
+    <p class="note">После подтверждения бот пришлёт запись в чат и напомнит о визите заранее.</p>
+  </section>
+
+  <!-- Готово (только в браузере: в Telegram окно закрывается само) -->
+  <section class="screen done" id="screen-done" hidden>
+    <div class="check" aria-hidden="true">✓</div>
+    <h1>Вы записаны!</h1>
+    <div class="summary" id="summary-done"></div>
+    <p class="note">Это демо в браузере. В Telegram запись придёт в чат с ботом, а администратор получит уведомление.</p>
+  </section>
+</main>
+
+<!-- Своя кнопка для открытия вне Telegram; в Telegram используется нативная MainButton -->
+<div class="bottom" id="bottom" hidden>
+  <button class="back" id="web-back" type="button" aria-label="Назад">←</button>
+  <button class="main" id="web-main" type="button"></button>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
