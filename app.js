@@ -1,9 +1,14 @@
 /* Mini App записи в барбершоп «Лезвие».
  *
- * Расписание приходит от бота в адресе страницы (?d=...): услуги и свободные окна на 7 дней.
- * Выбор клиента уходит обратно боту через Telegram.WebApp.sendData — бот ещё раз проверяет,
- * что время свободно, и создаёт запись. Открыть страницу можно и в обычном браузере:
- * тогда показываются демо-данные, а вместо кнопки Telegram — своя кнопка внизу.
+ * Расписание приходит от бота в адресе страницы (?d=...). Бот берёт его с сайта: услуги, мастера
+ * и для каждого дня и мастера — маска свободных клеток по 30 минут. Окна для услуги приложение
+ * считает само: услуга длиной D помещается с клетки k, если свободны клетки k … k + ⌈D/30⌉ − 1.
+ * Выбор клиента уходит обратно боту через Telegram.WebApp.sendData — бот передаёт его сайту,
+ * сайт ещё раз проверяет время и записывает в общую базу. Открыть страницу можно и в обычном
+ * браузере: тогда показываются демо-данные, а вместо кнопки Telegram — своя кнопка внизу.
+ *
+ * Формат v1 (отдельный бот без сайта, папка barbershop-bot-standalone) тоже поддерживается:
+ * там нет мастеров, а для каждой услуги и дня приходит готовая маска свободных начал.
  */
 (function () {
   "use strict";
@@ -29,7 +34,7 @@
       var bytes = new Uint8Array(bin.length);
       for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       var data = JSON.parse(new TextDecoder().decode(bytes));
-      return data && data.v === 1 ? data : null;
+      return data && (data.v === 1 || data.v === 2) ? data : null;
     } catch (e) {
       return null;
     }
@@ -38,29 +43,25 @@
   // Демо-расписание для открытия в браузере (портфолио): та же структура, что присылает бот
   function demoPayload() {
     var services = [
-      ["haircut", "Мужская стрижка", 1200, 60], ["beard", "Оформление бороды", 800, 30],
-      ["combo", "Стрижка + борода", 1800, 90], ["kids", "Детская стрижка", 900, 45],
-      ["buzz", "Стрижка машинкой", 700, 30]
+      [1, "Мужская стрижка", 1200, 60], [2, "Оформление бороды", 800, 30],
+      [3, "Стрижка + борода", 1800, 90], [4, "Детская стрижка", 900, 45],
+      [5, "Стрижка машинкой", 700, 30]
     ];
+    var masters = [[1, "Артём", [1, 2, 3, 5]], [2, "Илья", [1, 4, 5]], [3, "Марк", [1, 2, 3]]];
     var times = [];
-    for (var h = 10; h < 20; h++) times.push((h < 10 ? "0" : "") + h + ":00");
+    for (var h = 10; h < 20; h++) times.push(h + ":00", h + ":30");
     var z = 180, today = bizNow(z), free = {};
-    for (var i = 0; i < 7; i++) {
-      var day = addDays(today.date, i);
-      var busy = [];
-      for (var k = 0; k < times.length; k++) if ((i * 7 + k * 3) % 5 === 0) busy.push([k * 60, k * 60 + 60]);
-      free[day] = services.map(function (s) {
+    for (var i = 0; i < 14; i++) {
+      free[addDays(today.date, i)] = masters.map(function (m, mi) {
         var mask = 0;
         for (var k = 0; k < times.length; k++) {
-          var start = k * 60, end = start + s[3];
-          if (end > times.length * 60) continue;
-          var clash = busy.some(function (b) { return start < b[1] && b[0] < end; });
-          if (!clash) mask |= 1 << k;
+          var busy = ((i + 1) * (mi + 2) * 7 + Math.floor(k / 2) * 5) % 9 < 3;   // примерно треть занята
+          if (!busy) mask += Math.pow(2, k);
         }
         return mask;
       });
     }
-    return { v: 1, z: z, l: 30, t: times, s: services, f: free, demo: true };
+    return { v: 2, z: z, l: 60, st: 30, t: times, s: services, m: masters, f: free, demo: true };
   }
 
   // «Сейчас» в часовом поясе заведения, независимо от часового пояса телефона
@@ -79,20 +80,45 @@
 
   var data = decodePayload() || demoPayload();
   var services = data.s.map(function (s) { return { id: s[0], name: s[1], price: s[2], duration: s[3] }; });
+  var v1 = data.v === 1;   // отдельный бот без мастеров
+  var masters = (data.m || []).map(function (m, i) { return { id: m[0], name: m[1], services: m[2], index: i }; });
 
-  function freeTimes(day, serviceIndex) {
-    var mask = (data.f[day] || [])[serviceIndex] || 0;
+  // Бит k маски: клетка k свободна. Обычные & и << в JS работают только с 31 битом, поэтому через деление
+  function bit(mask, k) { return Math.floor(mask / Math.pow(2, k)) % 2 === 1; }
+
+  function mastersFor(serviceIndex) {
+    var id = services[serviceIndex].id;
+    return masters.filter(function (m) { return m.services.indexOf(id) >= 0; });
+  }
+
+  // Свободные начала услуги в этот день. masterId = 0 — «любой мастер»
+  function freeTimes(day, serviceIndex, masterId) {
+    if (serviceIndex < 0) return [];
     var now = bizNow(data.z);
     if (day < now.date) return [];
+    if (v1) {
+      var m1 = (data.f[day] || [])[serviceIndex] || 0;
+      return data.t.filter(function (t, k) {
+        return bit(m1, k) && (day > now.date || toMinutes(t) >= now.minutes + data.l);
+      });
+    }
+    var cells = Math.ceil(services[serviceIndex].duration / data.st);
+    var who = mastersFor(serviceIndex).filter(function (m) { return !masterId || m.id === masterId; });
+    var masks = who.map(function (m) { return (data.f[day] || [])[m.index] || 0; });
     return data.t.filter(function (t, k) {
-      if (!(mask & (1 << k))) return false;
-      return day > now.date || toMinutes(t) >= now.minutes + data.l;
+      if (k + cells > data.t.length) return false;
+      if (day === now.date && toMinutes(t) < now.minutes + data.l) return false;
+      return masks.some(function (mask) {
+        for (var c = k; c < k + cells; c++) if (!bit(mask, c)) return false;
+        return true;
+      });
     });
   }
+  function freeNow(day) { return freeTimes(day, state.service, state.master); }
 
   // ---------- состояние и элементы ----------
 
-  var state = { step: 1, service: -1, day: null, time: null };
+  var state = { step: 1, service: -1, master: 0, day: null, time: null };
   var $ = function (id) { return document.getElementById(id); };
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -120,7 +146,11 @@
       b.appendChild(info);
       b.appendChild(el("span", "price", rub(s.price)));
       b.addEventListener("click", function () {
-        if (state.service !== i) { state.service = i; state.time = null; haptic(); }
+        if (state.service !== i) {
+          state.service = i; state.time = null; haptic();
+          var ids = mastersFor(i).map(function (m) { return m.id; });
+          if (ids.indexOf(state.master) < 0) state.master = 0;   // этот мастер услугу не делает
+        }
         renderServices();
         updateButtons();
       });
@@ -128,7 +158,36 @@
     });
   }
 
-  // ---------- шаг 2: день и время ----------
+  // ---------- шаг 2: мастер, день и время ----------
+
+  function masterName() {
+    var m = masters.filter(function (x) { return x.id === state.master; })[0];
+    return m ? m.name : "Любой мастер";
+  }
+
+  function renderMasters() {
+    var box = $("masters");
+    box.innerHTML = "";
+    box.hidden = v1;
+    if (v1) { document.querySelector("#screen-2 h1").textContent = "Когда вам удобно?"; return; }
+    var list = mastersFor(state.service);
+    var options = (list.length > 1 ? [{ id: 0, name: "Любой мастер" }] : []).concat(list);
+    if (list.length === 1) state.master = list[0].id;
+    options.forEach(function (m) {
+      var b = el("button", "master", m.name);
+      b.type = "button";
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-checked", String(state.master === m.id));
+      b.addEventListener("click", function () {
+        if (state.master !== m.id) { state.master = m.id; state.time = null; haptic(); }
+        renderMasters();
+        renderDays();
+        renderTimes();
+        updateButtons();
+      });
+      box.appendChild(b);
+    });
+  }
 
   function availableDays() {
     var today = bizNow(data.z).date;
@@ -140,8 +199,8 @@
     box.innerHTML = "";
     var days = availableDays();
     var today = bizNow(data.z).date;
-    if (!state.day || !freeTimes(state.day, state.service).length) {
-      state.day = days.filter(function (d) { return freeTimes(d, state.service).length; })[0] || null;
+    if (!state.day || !freeNow(state.day).length) {
+      state.day = days.filter(function (d) { return freeNow(d).length; })[0] || null;
     }
     days.forEach(function (d) {
       var date = parseDay(d);
@@ -149,7 +208,7 @@
       b.type = "button";
       b.setAttribute("role", "tab");
       b.setAttribute("aria-selected", String(d === state.day));
-      b.disabled = !freeTimes(d, state.service).length;
+      b.disabled = !freeNow(d).length;
       b.appendChild(el("span", "wd", d === today ? "Сегодня" : d === addDays(today, 1) ? "Завтра" : WEEKDAYS[date.getUTCDay()]));
       b.appendChild(el("span", "num", String(date.getUTCDate())));
       b.appendChild(el("span", "mon", MONTHS[date.getUTCMonth()]));
@@ -166,7 +225,7 @@
   function renderTimes() {
     var box = $("times");
     box.innerHTML = "";
-    var free = state.day ? freeTimes(state.day, state.service) : [];
+    var free = state.day ? freeNow(state.day) : [];
     $("no-times").hidden = free.length > 0;
     if (!free.length) return;
     data.t.forEach(function (t) {
@@ -188,12 +247,13 @@
 
   function digitsOf(v) { return (v || "").replace(/\D/g, ""); }
 
-  // Та же логика, что в боте (utils.normalize_phone): 8XXXXXXXXXX → +7XXXXXXXXXX, 10–15 цифр
+  // Та же логика, что на сайте и в боте: российский номер → +7XXXXXXXXXX
   function normalizePhone(v) {
     var d = digitsOf(v);
-    if (d.length === 11 && d[0] === "8") d = "7" + d.slice(1);
-    if (d.length === 10 && d[0] === "9") d = "7" + d;
-    return d.length >= 10 && d.length <= 15 ? "+" + d : null;
+    if (d.length === 11 && (d[0] === "8" || d[0] === "7")) d = "7" + d.slice(1);
+    else if (d.length === 10 && d[0] === "9") d = "7" + d;
+    else return null;
+    return "+" + d;
   }
 
   function formatPhoneInput() {
@@ -234,10 +294,10 @@
   function renderSummary(target) {
     var s = services[state.service];
     var rows = [
-      ["Услуга", s.name], ["Когда", dayLong(state.day) + ", " + state.time],
+      ["Услуга", s.name]].concat(v1 ? [] : [["Мастер", masterName()]]).concat([["Когда", dayLong(state.day) + ", " + state.time],
       ["Длительность", s.duration + " мин"], ["Имя", $("name").value.trim()],
       ["Телефон", prettyPhone(normalizePhone($("phone").value))], ["Стоимость", rub(s.price)]
-    ];
+    ]);
     var box = $(target);
     box.innerHTML = "";
     rows.forEach(function (r, i) {
@@ -268,10 +328,11 @@
     var s = services[state.service];
     if (step === 2) {
       $("crumb-2").textContent = s.name + " · " + rub(s.price);
+      renderMasters();
       renderDays();
       renderTimes();
     }
-    if (step === 3) $("crumb-3").textContent = s.name + " · " + dayLong(state.day) + ", " + state.time;
+    if (step === 3) $("crumb-3").textContent = s.name + (v1 ? "" : " · " + masterName()) + " · " + dayLong(state.day) + ", " + state.time;
     if (step === 4) renderSummary("summary");
     window.scrollTo(0, 0);
     updateButtons();
@@ -308,7 +369,8 @@
   function submit() {
     var c = validateContacts();
     var s = services[state.service];
-    var payload = { v: 1, s: s.id, d: state.day, t: state.time, n: c.name, p: c.phone };
+    var payload = v1 ? { v: 1, s: s.id, d: state.day, t: state.time, n: c.name, p: c.phone }
+                     : { v: 2, s: s.id, m: state.master, d: state.day, t: state.time, n: c.name, p: c.phone };
     if (inTelegram && !data.demo) {
       // Окно закроется, бот получит данные сообщением и подтвердит запись в чате
       if (nativeButtons) tg.MainButton.showProgress();
